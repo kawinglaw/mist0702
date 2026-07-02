@@ -315,7 +315,7 @@
       baseParticleRadius: 40,
       mistMaxAlpha: 0.88,
       mistBaseFill: 0.32,
-      mouthOpenThreshold: 0.012,
+      mouthOpenThreshold: 0.006,
       revealThreshold: 0.35,
       alertThreshold: 0.55,
       roachCount: 12,
@@ -391,8 +391,7 @@
       hintDismissed: false,
       countdown: 0,
       countdownActive: false,
-      countdownFrames: 0,
-      alertFadeFrames: 0
+      countdownFrames: 0
     };
 
     let resultsHands = null;
@@ -823,29 +822,18 @@
         STATE.twoHandsUp = false;
         return;
       }
+      // 简单判定：检测到两只手，并且手掌在画面上半部分，即算举手投降
       if (!results.multiHandLandmarks || results.multiHandLandmarks.length < 2) {
         STATE.twoHandsUp = false;
         return;
       }
-      // 检测两只手是否举起（手掌在画面偏上，且手指张开）
-      const isPalmUp = (lm) => {
-        const wrist = lm[0];
-        const middleTip = lm[12];
-        const indexTip = lm[8];
-        const ringTip = lm[16];
-        const pinkyTip = lm[20];
-        // 手掌举起：手腕在指尖下方（y 更大）
-        const raised = wrist.y > middleTip.y && wrist.y > indexTip.y;
-        // 手指张开：指尖之间距离足够
-        const tips = [indexTip, middleTip, ringTip, pinkyTip];
-        let spread = 0;
-        for (let i = 0; i < tips.length - 1; i++) {
-          spread += Math.hypot(tips[i].x - tips[i+1].x, tips[i].y - tips[i+1].y);
-        }
-        return raised && spread > 0.12;
+
+      const isHandUp = (lm) => {
+        const palm = lm[9];
+        return palm.y < 0.8;
       };
 
-      STATE.twoHandsUp = results.multiHandLandmarks.every(isPalmUp);
+      STATE.twoHandsUp = results.multiHandLandmarks.every(isHandUp);
     }
 
     function initMediaPipe() {
@@ -866,8 +854,8 @@
       hands.setOptions({
         maxNumHands: 2,
         modelComplexity: 1,
-        minDetectionConfidence: 0.5,
-        minTrackingConfidence: 0.5
+        minDetectionConfidence: 0.4,
+        minTrackingConfidence: 0.4
       });
       hands.onResults(onHandsResults);
 
@@ -941,12 +929,12 @@
     function render() {
       STATE.time += 1;
 
-      // 平滑哈气强度，避免 MediaPipe 检测抖动造成一卡一卡
+      // 平滑哈气强度，响应更快，第一次张嘴也能立即见效
       const targetBlow = (STATE.mouthOpen && STATE.started) ? Math.min(1, STATE.mouthDistance / 0.035) : 0;
-      STATE.smoothBlow += (targetBlow - STATE.smoothBlow) * 0.12;
+      STATE.smoothBlow += (targetBlow - STATE.smoothBlow) * 0.25;
       const blowPower = STATE.smoothBlow;
-      const isBlowing = blowPower > 0.05;
-      const blowRadius = isBlowing ? 70 + blowPower * 160 : 0;
+      const isBlowing = blowPower > 0.03;
+      const blowRadius = isBlowing ? 90 + blowPower * 180 : 0;
 
       // 迷雾更新
       let clearedCount = 0;
@@ -1007,45 +995,39 @@
       // 手掌红色圆点 + 倒计时重置
       drawHandMarkers();
 
-      // 举手投降时：先让警报框渐渐消失，消失后再显示 3/2/1 倒计时
+      // 举手投降：只要两只手都被识别到（手掌在画面上半部分），直接开始倒计时
       if (STATE.alertShown && STATE.twoHandsUp) {
-        if (STATE.alertFadeFrames < 45) {
-          STATE.alertFadeFrames++;
-          const fade = 1 - STATE.alertFadeFrames / 45;
-          alertEl.style.opacity = fade.toFixed(3);
-          alertEl.style.visibility = 'visible';
-          // 倒计时尚未开始
-          countdownEl.classList.remove('active');
-        } else {
-          // 警报完全消失
-          alertEl.style.opacity = '0';
-          alertEl.style.visibility = 'hidden';
-          alertEl.classList.remove('active');
+        // 立即隐藏警报框
+        alertEl.classList.remove('active');
+        alertEl.style.opacity = '0';
+        alertEl.style.visibility = 'hidden';
+        scanline.classList.remove('active');
+        redFlash.style.opacity = '0';
 
-          if (!STATE.countdownActive) {
-            STATE.countdownActive = true;
-            STATE.countdown = 3;
-            STATE.countdownFrames = 0;
-          }
-          STATE.countdownFrames++;
-          if (STATE.countdownFrames >= 20) {
-            STATE.countdown--;
-            STATE.countdownFrames = 0;
-          }
-          if (STATE.countdown > 0) {
-            countdownEl.textContent = STATE.countdown;
-            countdownEl.classList.add('active');
-          } else {
-            // 不显示 0，直接重置
-            resetAll();
-          }
+        if (!STATE.countdownActive) {
+          STATE.countdownActive = true;
+          STATE.countdown = 3;
+          STATE.countdownFrames = 0;
+        }
+        STATE.countdownFrames++;
+        if (STATE.countdownFrames >= 20) {
+          STATE.countdown--;
+          STATE.countdownFrames = 0;
+        }
+        if (STATE.countdown > 0) {
+          countdownEl.textContent = STATE.countdown;
+          countdownEl.classList.add('active');
+        } else {
+          // 不显示 0，直接重置
+          resetAll();
         }
       } else {
         // 手放下则恢复警报显示
-        STATE.alertFadeFrames = 0;
         if (STATE.alertShown) {
           alertEl.style.opacity = '';
           alertEl.style.visibility = '';
+          alertEl.classList.add('active');
+          scanline.classList.add('active');
         }
         STATE.countdownActive = false;
         STATE.countdown = 0;
@@ -1070,6 +1052,10 @@
         statusEl.classList.add('show');
         if (!STATE.alertShown) {
           statusEl.textContent = `迷雾擦除 ${(STATE.clearedRatio * 100).toFixed(1)}% · ${STATE.mouthOpen ? '检测到哈气' : '等待哈气'} · 嘴距 ${STATE.mouthDistance.toFixed(4)}`;
+        } else if (!STATE.twoHandsUp) {
+          statusEl.textContent = '⚠️ 请举起双手投降以重置空间';
+        } else if (STATE.countdownActive) {
+          statusEl.textContent = `⏳ 倒计时 ${STATE.countdown}`;
         }
       }
 
@@ -1092,7 +1078,6 @@
       STATE.countdown = 0;
       STATE.countdownActive = false;
       STATE.countdownFrames = 0;
-      STATE.alertFadeFrames = 0;
       // hintDismissed 保持原值：提示词整个会话只出现一次
 
       alertEl.style.opacity = '';
